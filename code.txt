@@ -1,0 +1,85 @@
+pip install moviepy
+import cv2
+import numpy as np
+from scipy.spatial import distance
+import imutils
+from moviepy.editor import VideoFileClip
+from google.colab import files  # Import the files module
+
+class DETECTION:
+    def __init__(self):
+        self.Labels = open("coco.names", 'r').read().split("\n")
+        self.Network = cv2.dnn.readNetFromDarknet("yolov3.cfg", "yolov3.weights")
+        self.UCOL = self.Network.getUnconnectedOutLayersNames()
+
+    def Detect_People(self, frame, person_id=0):
+        H, W = frame.shape[:2]
+        Blob = cv2.dnn.blobFromImage(frame, 1/255.0, (416, 416), swapRB=True, crop=False)
+        self.Network.setInput(Blob)
+        Output_Layers = self.Network.forward(self.UCOL)
+        BOXES, CONFIDENCES, CENTROIDS = [], [], []
+        for outputs in Output_Layers:
+            for detected in outputs:
+                scores = detected[5:]
+                classID = np.argmax(scores)
+                confidence = scores[classID]
+                if classID == person_id and confidence >= 0.3:
+                    BOX = detected[0:4] * np.array([W, H, W, H])
+                    (X_CENTER, Y_CENTER, Width, Height) = BOX.astype("int")
+                    X = (X_CENTER - (Width/2))
+                    Y = (Y_CENTER - (Height/2))
+                    BOXES.append([int(X), int(Y), int(Width), int(Height)])
+                    CENTROIDS.append((X_CENTER, Y_CENTER))
+                    CONFIDENCES.append(float(confidence))
+        idx = cv2.dnn.NMSBoxes(BOXES, CONFIDENCES, 0.3, 0.3)
+        result = []
+        if len(idx) > 0:
+            for i in idx.flatten():
+                x, y = BOXES[i][0], BOXES[i][1]
+                w, h = BOXES[i][2], BOXES[i][3]
+                r = (CONFIDENCES[i], (x, y, x+w, y+h), CENTROIDS[i])
+                result.append(r)
+        return result
+
+    def VIDEO_STREAM(self, video, max_frames=300):
+        V = cv2.VideoCapture(video)
+        frame_width = int(V.get(3))
+        frame_height = int(V.get(4))
+        out_filename = '/content/pedestrians.mp4'
+
+        print("START DETECTING")
+        frame_count = 0  # Add a counter for the frames
+
+        try:
+            with VideoFileClip(video) as video_clip:
+                out = video_clip.fl_image(self.process_frame)
+                out.write_videofile(out_filename, codec='libx264', audio_codec='aac')
+
+            # Trigger the download using the files.download function
+            files.download(out_filename)
+        except KeyboardInterrupt:
+            V.release()
+            print("Video stream stopped.")
+        except Exception as e:
+            V.release()
+            print(f"Error: {e}")
+
+    def process_frame(self, frame):
+        frame = imutils.resize(frame, width=700)
+        print(f"Frame size: {frame.shape}")
+
+        RESULT = self.Detect_People(frame, self.Labels.index("person"))
+        print(f"Number of people detected: {len(RESULT)}")
+
+        for i, (prob, box, cent) in enumerate(RESULT):
+            x, y, end_x, end_y = box
+            x_cent, y_cent = cent
+            color = (0, 255, 0)
+            cv2.rectangle(frame, (x, y), (end_x, end_y), color, 2)
+
+        return frame
+
+# Create an instance of the DETECTION class
+RUN = DETECTION()
+# Call the VIDEO_STREAM method with a specified maximum number of frames
+RUN.VIDEO_STREAM("/content/pedestrians.mp4", max_frames=300)
